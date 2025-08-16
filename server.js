@@ -111,23 +111,22 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     const descriptors = [];
     for (const file of req.files) {
       const img = await loadImage(file.path);
-      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks().withFaceDescriptor();
+      const detection = await faceapi
+        .detectSingleFace(img)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
 
-      if (detections.length === 0)
+      if (!detection)
         return res.status(400).json({ error: `No face detected in ${file.originalname}` });
 
-      if (detections.length > 1)
-        return res.status(400).json({ error: `Multiple faces detected in ${file.originalname}` });
-
-      descriptors.push(detections[0].descriptor);
+      descriptors.push(detection.descriptor);
     }
 
     // Validate that all descriptors belong to the same person
-    const faceMatcher = new faceapi.FaceMatcher(descriptors.map((d, i) => new faceapi.LabeledFaceDescriptors(`img${i}`, [d])), 0.6);
-
+    const baseDescriptor = descriptors[0];
     for (let i = 1; i < descriptors.length; i++) {
-      const bestMatch = faceMatcher.findBestMatch(descriptors[i]);
-      if (bestMatch.label !== `img0`) {
+      const distance = faceapi.euclideanDistance(baseDescriptor, descriptors[i]);
+      if (distance > 0.6) {
         return res.status(400).json({ error: "Uploaded images are not of the same person" });
       }
     }

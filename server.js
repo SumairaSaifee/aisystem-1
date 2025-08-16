@@ -90,6 +90,7 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 
 // Add Student
 // Add Student with validation
+// Add Student with single-face validation
 app.post("/students", upload.array("images", 3), async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -118,18 +119,21 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     // Process images
     for (const file of req.files) {
       const img = await loadImage(file.path);
-      const detection = await faceapi.detectSingleFace(img).withFaceLandmarks();
+      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks();
 
-      if (!detection)
+      if (detections.length === 0)
         return res.status(400).json({ error: `No face detected in ${file.originalname}` });
 
+      if (detections.length > 1)
+        return res.status(400).json({ error: `Multiple faces detected in ${file.originalname}. Upload only a single face.` });
+
       // Optional: check if face is roughly centered
-      const { box } = detection.detection;
+      const { box } = detections[0].detection;
       const imgCenterX = img.width / 2;
       const imgCenterY = img.height / 2;
       const faceCenterX = box.x + box.width / 2;
       const faceCenterY = box.y + box.height / 2;
-      const maxOffset = 50; // pixels, adjust as needed
+      const maxOffset = 50; // pixels
 
       if (
         Math.abs(imgCenterX - faceCenterX) > maxOffset ||
@@ -155,6 +159,7 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     conn.release();
   }
 });
+
 
 
 // List Students

@@ -1,36 +1,33 @@
-require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 
 const app = express();
 app.use(express.json());
 
-// Determine DB config
-const dbConfig = {
-  host: process.env.MYSQLHOST || process.env.LOCAL_DB_HOST,
-  user: process.env.MYSQLUSER || process.env.LOCAL_DB_USER,
-  password: process.env.MYSQLPASSWORD || process.env.LOCAL_DB_PASS,
-  database: process.env.MYSQLDATABASE || process.env.LOCAL_DB_NAME,
-  port: process.env.MYSQLPORT || process.env.LOCAL_DB_PORT,
+// Railway MySQL config (injected automatically)
+const pool = mysql.createPool({
+  host: process.env.MYSQLHOST,       // Railway internal host
+  user: process.env.MYSQLUSER,       // Railway DB user
+  password: process.env.MYSQLPASSWORD, // Railway DB password
+  database: process.env.MYSQLDATABASE, // Railway DB name
+  port: process.env.MYSQLPORT,       // Railway DB port
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
-};
+});
 
-const pool = mysql.createPool(dbConfig);
-
-// Test DB connection
+// Test connection
 (async () => {
   try {
     const connection = await pool.getConnection();
-    console.log('✅ DB connected successfully!');
+    console.log('✅ DB connected successfully on Railway!');
     connection.release();
   } catch (err) {
     console.error('❌ DB connection failed:', err);
   }
 })();
 
-// Initialize tables
+// Initialize students table
 async function initDB() {
   try {
     await pool.query(`
@@ -49,7 +46,7 @@ async function initDB() {
 
 initDB();
 
-// Example route
+// Sample route
 app.get('/students', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM students');

@@ -89,25 +89,61 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 /* -------------------- Routes -------------------- */
 
 // Add Student
+// Add Student with validation
 app.post("/students", upload.array("images", 3), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { student_id, app_id, name } = req.body;
-    if (!student_id || !app_id || !name) return res.status(400).json({ error: "student_id, app_id, name required" });
-    if (!req.files || req.files.length !== 3) return res.status(400).json({ error: "3 images required" });
+    if (!student_id || !app_id || !name)
+      return res.status(400).json({ error: "student_id, app_id, and name are required" });
 
+    if (!req.files || req.files.length !== 3)
+      return res.status(400).json({ error: "Exactly 3 images are required" });
+
+    // Duplicate check
+    const [existing] = await conn.execute(
+      "SELECT id FROM ai_students WHERE student_id = ? OR app_id = ?",
+      [student_id, app_id]
+    );
+    if (existing.length > 0)
+      return res.status(400).json({ error: "Duplicate student_id or app_id detected" });
+
+    // Insert student
     const [result] = await conn.execute(
       "INSERT INTO ai_students (student_id, app_id, name) VALUES (?, ?, ?)",
       [student_id, app_id, name]
     );
     const sId = result.insertId;
 
+    // Process images
     for (const file of req.files) {
+      const img = await loadImage(file.path);
+      const detection = await faceapi.detectSingleFace(img).withFaceLandmarks();
+
+      if (!detection)
+        return res.status(400).json({ error: `No face detected in ${file.originalname}` });
+
+      // Optional: check if face is roughly centered
+      const { box } = detection.detection;
+      const imgCenterX = img.width / 2;
+      const imgCenterY = img.height / 2;
+      const faceCenterX = box.x + box.width / 2;
+      const faceCenterY = box.y + box.height / 2;
+      const maxOffset = 50; // pixels, adjust as needed
+
+      if (
+        Math.abs(imgCenterX - faceCenterX) > maxOffset ||
+        Math.abs(imgCenterY - faceCenterY) > maxOffset
+      ) {
+        return res.status(400).json({ error: `Face in ${file.originalname} is not centered` });
+      }
+
+      // Convert to descriptor
+      const descriptor = await faceapi.computeFaceDescriptor(img);
       const imagePath = path.relative(__dirname, file.path).replace(/\\/g, "/");
-      const descriptor = await imageToDescriptor(file.path);
       await conn.execute(
         "INSERT INTO ai_student_images (student_id, image_path, face_descriptor) VALUES (?, ?, ?)",
-        [sId, imagePath, JSON.stringify(descriptor)]
+        [sId, imagePath, JSON.stringify(Array.from(descriptor))]
       );
     }
 
@@ -119,6 +155,7 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     conn.release();
   }
 });
+
 
 // List Students
 app.get("/students", async (req, res) => {

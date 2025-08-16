@@ -1,33 +1,50 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 
 const app = express();
 app.use(express.json());
 
-// Railway MySQL config (injected automatically)
-const pool = mysql.createPool({
-  host: process.env.MYSQLHOST,       // Railway internal host
-  user: process.env.MYSQLUSER,       // Railway DB user
-  password: process.env.MYSQLPASSWORD, // Railway DB password
-  database: process.env.MYSQLDATABASE, // Railway DB name
-  port: process.env.MYSQLPORT,       // Railway DB port
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
+// Detect if running on Railway
+const isRailway = process.env.RAILWAY_ENV === 'true';
 
-// Test connection
+// DB config: Railway internal DB vs local fallback
+const dbConfig = isRailway
+  ? {
+      host: process.env.MYSQLHOST,
+      user: process.env.MYSQLUSER,
+      password: process.env.MYSQLPASSWORD,
+      database: process.env.MYSQLDATABASE,
+      port: process.env.MYSQLPORT,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0
+    }
+  : {
+      host: process.env.LOCAL_DB_HOST,
+      user: process.env.LOCAL_DB_USER,
+      password: process.env.LOCAL_DB_PASS,
+      database: process.env.LOCAL_DB_NAME,
+      port: process.env.LOCAL_DB_PORT,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0
+    };
+
+const pool = mysql.createPool(dbConfig);
+
+// Test DB connection
 (async () => {
   try {
     const connection = await pool.getConnection();
-    console.log('✅ DB connected successfully on Railway!');
+    console.log('✅ DB connected successfully!');
     connection.release();
   } catch (err) {
     console.error('❌ DB connection failed:', err);
   }
 })();
 
-// Initialize students table
+// Initialize tables
 async function initDB() {
   try {
     await pool.query(`

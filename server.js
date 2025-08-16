@@ -107,19 +107,22 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     if (existing.length > 0)
       return res.status(400).json({ error: "Duplicate student_id or app_id detected" });
 
-    // Detect faces and descriptors for all images
     const descriptors = [];
+
     for (const file of req.files) {
       const img = await loadImage(file.path);
-      const detection = await faceapi
-        .detectSingleFace(img)
-        .withFaceLandmarks()
-        .withFaceDescriptor();
+      // Detect all faces
+      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks();
 
-      if (!detection)
+      if (detections.length === 0)
         return res.status(400).json({ error: `No face detected in ${file.originalname}` });
 
-      descriptors.push(detection.descriptor);
+      if (detections.length > 1)
+        return res.status(400).json({ error: `Multiple faces detected in ${file.originalname}. Upload only a single face.` });
+
+      // Get descriptor for the single face
+      const descriptorObj = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
+      descriptors.push(descriptorObj.descriptor);
     }
 
     // Validate that all descriptors belong to the same person
@@ -148,7 +151,7 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
       );
     }
 
-    res.json({ message: "Student registered with 3 images (same person validated)", student_id: sId });
+    res.json({ message: "Student registered with 3 images (same person, single-face validated)", student_id: sId });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

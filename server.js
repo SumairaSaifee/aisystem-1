@@ -88,9 +88,7 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 
 /* -------------------- Routes -------------------- */
 
-// Add Student
-// Add Student with validation
-// Add Student with single-face validation
+// Add Student with single-face & same-person validation
 app.post("/students", upload.array("images", 3), async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -109,6 +107,31 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     if (existing.length > 0)
       return res.status(400).json({ error: "Duplicate student_id or app_id detected" });
 
+    // Detect faces and descriptors for all images
+    const descriptors = [];
+    for (const file of req.files) {
+      const img = await loadImage(file.path);
+      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks().withFaceDescriptor();
+
+      if (detections.length === 0)
+        return res.status(400).json({ error: `No face detected in ${file.originalname}` });
+
+      if (detections.length > 1)
+        return res.status(400).json({ error: `Multiple faces detected in ${file.originalname}` });
+
+      descriptors.push(detections[0].descriptor);
+    }
+
+    // Validate that all descriptors belong to the same person
+    const faceMatcher = new faceapi.FaceMatcher(descriptors.map((d, i) => new faceapi.LabeledFaceDescriptors(`img${i}`, [d])), 0.6);
+
+    for (let i = 1; i < descriptors.length; i++) {
+      const bestMatch = faceMatcher.findBestMatch(descriptors[i]);
+      if (bestMatch.label !== `img0`) {
+        return res.status(400).json({ error: "Uploaded images are not of the same person" });
+      }
+    }
+
     // Insert student
     const [result] = await conn.execute(
       "INSERT INTO ai_students (student_id, app_id, name) VALUES (?, ?, ?)",
@@ -116,42 +139,17 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     );
     const sId = result.insertId;
 
-    // Process images
-    for (const file of req.files) {
-      const img = await loadImage(file.path);
-      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks();
-
-      if (detections.length === 0)
-        return res.status(400).json({ error: `No face detected in ${file.originalname}` });
-
-      if (detections.length > 1)
-        return res.status(400).json({ error: `Multiple faces detected in ${file.originalname}. Upload only a single face.` });
-
-      // Optional: check if face is roughly centered
-      const { box } = detections[0].detection;
-      const imgCenterX = img.width / 2;
-      const imgCenterY = img.height / 2;
-      const faceCenterX = box.x + box.width / 2;
-      const faceCenterY = box.y + box.height / 2;
-      const maxOffset = 50; // pixels
-
-      if (
-        Math.abs(imgCenterX - faceCenterX) > maxOffset ||
-        Math.abs(imgCenterY - faceCenterY) > maxOffset
-      ) {
-        return res.status(400).json({ error: `Face in ${file.originalname} is not centered` });
-      }
-
-      // Convert to descriptor
-      const descriptor = await faceapi.computeFaceDescriptor(img);
+    // Insert images into DB
+    for (let i = 0; i < req.files.length; i++) {
+      const file = req.files[i];
       const imagePath = path.relative(__dirname, file.path).replace(/\\/g, "/");
       await conn.execute(
         "INSERT INTO ai_student_images (student_id, image_path, face_descriptor) VALUES (?, ?, ?)",
-        [sId, imagePath, JSON.stringify(Array.from(descriptor))]
+        [sId, imagePath, JSON.stringify(Array.from(descriptors[i]))]
       );
     }
 
-    res.json({ message: "Student registered with 3 images", student_id: sId });
+    res.json({ message: "Student registered with 3 images (same person validated)", student_id: sId });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -159,7 +157,6 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     conn.release();
   }
 });
-
 
 
 // List Students

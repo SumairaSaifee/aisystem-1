@@ -53,9 +53,9 @@ let pool;
 async function initDB() {
   pool = await mysql.createPool({
     host: process.env.MYSQLHOST,
-      user: process.env.MYSQLUSER,
-      password: process.env.MYSQLPASSWORD,
-     database: process.env.MYSQLDATABASE,      
+    user: process.env.MYSQLUSER,
+    password: process.env.MYSQLPASSWORD,
+    database: process.env.MYSQLDATABASE,      
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,

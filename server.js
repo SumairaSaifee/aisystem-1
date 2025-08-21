@@ -88,6 +88,21 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 
 /* -------------------- Routes -------------------- */
 
+async function downloadImage(url, folder, studentId) {
+  try {
+    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const ext = path.extname(url).split("?")[0] || ".jpg";
+    const safeName = studentId ? String(studentId).replace(/[^\w\-]+/g, "_") : Date.now();
+    const fileName = `${safeName}_${Date.now()}${ext}`;
+    const destPath = path.join(folder, fileName);
+    fs.writeFileSync(destPath, response.data);
+    return destPath;
+  } catch (err) {
+    console.error("downloadImage error:", err.message);
+    throw new Error(`Failed to download image from ${url}`);
+  }
+}
+
 app.post("/students", upload.array("images", 3), async (req, res) => {
   const conn = await pool.getConnection();
   try {

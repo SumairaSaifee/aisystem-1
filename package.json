@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "@tensorflow/tfjs-node": "^4.22.0",
+    "axios": "^1.11.0",
     "canvas": "^3.1.2",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",

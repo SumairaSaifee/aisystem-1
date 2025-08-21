@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const express = require("express");
 const morgan = require("morgan");
 const path = require("path");
@@ -8,9 +7,10 @@ const mime = require("mime-types");
 const multer = require("multer");
 const mysql = require("mysql2/promise");
 const axios = require("axios");
-
 const faceapi = require("face-api.js");
 const canvas = require("canvas");
+const sharp = require("sharp");
+
 const { Canvas, Image, ImageData, loadImage } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
@@ -27,7 +27,7 @@ const UP_CLASSES  = path.join(UPLOAD_ROOT, "classes");
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
 
-/* -------------------- Multer (disk) */
+/* -------------------- Multer -------------------- */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     if (req.path.startsWith("/students")) cb(null, UP_STUDENTS);
@@ -74,11 +74,23 @@ async function loadFaceModels() {
 }
 
 /* -------------------- Helpers -------------------- */
-async function imageToDescriptor(imagePath) {
-  const img = await loadImage(imagePath);
+async function downloadImage(url, folder, studentId) {
+  const response = await axios.get(url, { responseType: "arraybuffer" });
+  const ext = path.extname(url).split("?")[0] || ".jpg";
+  const safeName = studentId ? String(studentId).replace(/[^\w\-]+/g, "_") : Date.now();
+  const fileName = `${safeName}_${Date.now()}${ext}`;
+  const destPath = path.join(folder, fileName);
+  fs.writeFileSync(destPath, response.data);
+  return destPath;
+}
+
+async function processImage(filePath) {
+  // Resize image to speed up processing
+  const buffer = await sharp(filePath).resize(512).toBuffer();
+  const img = await loadImage(buffer);
   const detection = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
-  if (!detection) throw new Error("No face detected in the image. Upload a clear front-facing photo.");
-  return Array.from(detection.descriptor);
+  if (!detection) throw new Error(`No face detected in ${filePath}`);
+  return detection.descriptor;
 }
 
 /* -------------------- App -------------------- */
@@ -89,31 +101,7 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 
 /* -------------------- Routes -------------------- */
 
-async function downloadImage(url, folder, studentId) {
-  try {
-    const response = await axios.get(url, {
-      responseType: "arraybuffer",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; Node.js server)",
-      },
-      httpsAgent: new (require("https").Agent)({
-        rejectUnauthorized: false, // ignore SSL errors
-      }),
-    });
-
-    const ext = path.extname(url).split("?")[0] || ".jpg";
-    const safeName = studentId ? String(studentId).replace(/[^\w\-]+/g, "_") : Date.now();
-    const fileName = `${safeName}_${Date.now()}${ext}`;
-    const destPath = path.join(folder, fileName);
-
-    fs.writeFileSync(destPath, response.data);
-    return destPath;
-  } catch (err) {
-    console.error("downloadImage error:", err.message);
-    throw new Error(`Failed to download image from ${url}`);
-  }
-}
-
+// Add Student (files or URLs)
 app.post("/students", upload.array("images", 3), async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -121,28 +109,18 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     if (!student_id || !app_id || !name)
       return res.status(400).json({ error: "student_id, app_id, and name are required" });
 
-    let filePaths = [];
+    let filePaths = req.files?.map(f => f.path) || [];
 
-    // 1. Files from multer
-    if (req.files && req.files.length > 0) {
-      filePaths = req.files.map(f => f.path);
-    }
-
-    // 2. URLs provided
     if (image_urls) {
-      let urls;
+      let urls = [];
       try { urls = JSON.parse(image_urls); } 
       catch { urls = Array.isArray(image_urls) ? image_urls : [image_urls]; }
-
-      for (let i = 0; i < urls.length; i++) {
-        const filepath = await downloadImage(urls[i], UP_STUDENTS, student_id);
-        filePaths.push(filepath);
-      }
+      const downloaded = await Promise.all(urls.map(url => downloadImage(url, UP_STUDENTS, student_id)));
+      filePaths.push(...downloaded);
     }
 
-    if (filePaths.length !== 3) {
-      return res.status(400).json({ error: "Exactly 3 images are required (upload or urls)" });
-    }
+    if (filePaths.length !== 3)
+      return res.status(400).json({ error: "Exactly 3 images are required" });
 
     // Duplicate check
     const [existing] = await conn.execute(
@@ -150,30 +128,15 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
       [student_id, app_id]
     );
     if (existing.length > 0)
-      return res.status(400).json({ error: "Duplicate student_id or app_id detected" });
+      return res.status(400).json({ error: "Duplicate student_id or app_id" });
 
-    const descriptors = [];
-
-    for (const fp of filePaths) {
-      const img = await loadImage(fp);
-      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks();
-      if (detections.length === 0)
-        return res.status(400).json({ error: `No face detected in ${path.basename(fp)}` });
-      if (detections.length > 1)
-        return res.status(400).json({ error: `Multiple faces detected in ${path.basename(fp)}` });
-
-      const descriptorObj = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
-      descriptors.push(descriptorObj.descriptor);
-    }
+    // Compute descriptors in parallel
+    const descriptors = await Promise.all(filePaths.map(fp => processImage(fp)));
 
     // Validate same person
-    const baseDescriptor = descriptors[0];
-    for (let i = 1; i < descriptors.length; i++) {
-      const distance = faceapi.euclideanDistance(baseDescriptor, descriptors[i]);
-      if (distance > 0.6) {
-        return res.status(400).json({ error: "Uploaded images are not of the same person" });
-      }
-    }
+    const base = descriptors[0];
+    if (descriptors.some(d => faceapi.euclideanDistance(base, d) > 0.6))
+      return res.status(400).json({ error: "Images are not of the same person" });
 
     // Insert student
     const [result] = await conn.execute(
@@ -182,17 +145,18 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     );
     const sId = result.insertId;
 
-    // Save images + descriptors
-    for (let i = 0; i < filePaths.length; i++) {
-      const imagePath = path.relative(__dirname, filePaths[i]).replace(/\\/g, "/");
-      await conn.execute(
-        "INSERT INTO ai_student_images (student_id, image_path, face_descriptor) VALUES (?, ?, ?)",
-        [sId, imagePath, JSON.stringify(Array.from(descriptors[i]))]
-      );
-    }
+    // Batch insert images + descriptors
+    const values = filePaths.map((fp, i) => [
+      sId,
+      path.relative(__dirname, fp).replace(/\\/g, "/"),
+      JSON.stringify(Array.from(descriptors[i]))
+    ]);
+    await conn.query(
+      "INSERT INTO ai_student_images (student_id, image_path, face_descriptor) VALUES ?",
+      [values]
+    );
 
-    res.json({ message: "Student registered with 3 images (file upload or URL)", student_id: sId });
-
+    res.json({ message: "Student registered", student_id: sId });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -201,100 +165,70 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
   }
 });
 
-
-// List Students
-app.get("/students", async (req, res) => {
-  try {
-    const [rows] = await pool.query("SELECT * FROM ai_students ORDER BY id DESC");
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Class Attendance (multiple images, student_ids array)
+// Class Attendance (file upload)
 app.post("/class/attendance", upload.array("images", 5), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { timetable_id, student_ids } = req.body;
-    if (!timetable_id || !student_ids) return res.status(400).json({ error: "timetable_id and student_ids required" });
-    const studentIds = JSON.parse(student_ids);
-    if (!Array.isArray(studentIds) || studentIds.length === 0) return res.status(400).json({ error: "student_ids must be a non-empty array" });
-    if (!req.files || req.files.length === 0) return res.status(400).json({ error: "At least one class image required" });
+    if (!timetable_id || !student_ids || !req.files?.length)
+      return res.status(400).json({ error: "timetable_id, student_ids, and images required" });
 
-    // Fetch students with images
+    const studentIds = Array.isArray(student_ids) ? student_ids : JSON.parse(student_ids);
+
     const [students] = await conn.query(
-      `SELECT s.id AS student_id, s.name, i.face_descriptor
+      `SELECT s.id AS student_id, i.face_descriptor
        FROM ai_students s
        JOIN ai_student_images i ON s.id = i.student_id
        WHERE s.id IN (?)`,
       [studentIds]
     );
 
-    if (students.length === 0) return res.status(400).json({ error: "No student images found for given IDs" });
+    if (!students.length) return res.status(400).json({ error: "No student images found" });
 
-    const labeledDescriptorsMap = {};
-    students.forEach(s => {
-      try {
-        const arr = JSON.parse(s.face_descriptor);
-        const f32 = new Float32Array(arr);
-        if (!labeledDescriptorsMap[s.student_id]) labeledDescriptorsMap[s.student_id] = [];
-        labeledDescriptorsMap[s.student_id].push(f32);
-      } catch {}
-    });
+    const labeledDescriptors = Object.entries(students.reduce((acc, s) => {
+      const arr = JSON.parse(s.face_descriptor);
+      const f32 = new Float32Array(arr);
+      if (!acc[s.student_id]) acc[s.student_id] = [];
+      acc[s.student_id].push(f32);
+      return acc;
+    }, {})).map(([id, descs]) => new faceapi.LabeledFaceDescriptors(id, descs));
 
-    const labeledDescriptors = Object.entries(labeledDescriptorsMap).map(
-      ([id, descriptors]) => new faceapi.LabeledFaceDescriptors(id, descriptors)
-    );
+    const matcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
 
-    if (labeledDescriptors.length === 0) return res.status(400).json({ error: "No valid descriptors found" });
-
-    const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
-
-    // Process all class images
     const presentSet = new Set();
-    for (const file of req.files) {
-      const classImg = await loadImage(file.path);
-      const detections = await faceapi.detectAllFaces(classImg).withFaceLandmarks().withFaceDescriptors();
+    await Promise.all(req.files.map(async file => {
+      const img = await loadImage(file.path);
+      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks().withFaceDescriptors();
       detections.forEach(d => {
-        const bestMatch = faceMatcher.findBestMatch(d.descriptor);
-        if (bestMatch.label !== "unknown") presentSet.add(Number(bestMatch.label));
+        const match = matcher.findBestMatch(d.descriptor);
+        if (match.label !== "unknown") presentSet.add(Number(match.label));
       });
-    }
+    }));
 
     const uniquePresent = [...presentSet];
-    const absentStudentIds = studentIds.filter(id => !uniquePresent.includes(id));
+    const absentIds = studentIds.filter(id => !uniquePresent.includes(id));
 
-    // Upsert Present
+    // Batch upsert present
     if (uniquePresent.length) {
       const placeholders = uniquePresent.map(() => "(?, ?, 'Present')").join(",");
       const params = uniquePresent.flatMap(id => [id, timetable_id]);
       await conn.execute(
-        `INSERT INTO ai_attendance (student_id, timetable_id, status)
-         VALUES ${placeholders}
-         ON DUPLICATE KEY UPDATE status='Present'`,
+        `INSERT INTO ai_attendance (student_id, timetable_id, status) VALUES ${placeholders} ON DUPLICATE KEY UPDATE status='Present'`,
         params
       );
     }
 
-    // Upsert Absent
-    if (absentStudentIds.length) {
-      const placeholders = absentStudentIds.map(() => "(?, ?, 'Absent')").join(",");
-      const params = absentStudentIds.flatMap(id => [id, timetable_id]);
+    // Batch upsert absent
+    if (absentIds.length) {
+      const placeholders = absentIds.map(() => "(?, ?, 'Absent')").join(",");
+      const params = absentIds.flatMap(id => [id, timetable_id]);
       await conn.execute(
-        `INSERT INTO ai_attendance (student_id, timetable_id, status)
-         VALUES ${placeholders}
-         ON DUPLICATE KEY UPDATE status='Absent'`,
+        `INSERT INTO ai_attendance (student_id, timetable_id, status) VALUES ${placeholders} ON DUPLICATE KEY UPDATE status='Absent'`,
         params
       );
     }
 
-    res.json({
-      message: "Attendance processed",
-      presentCount: uniquePresent.length,
-      absentCount: absentStudentIds.length
-    });
-
+    res.json({ message: "Attendance processed", presentCount: uniquePresent.length, absentCount: absentIds.length });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -303,109 +237,68 @@ app.post("/class/attendance", upload.array("images", 5), async (req, res) => {
   }
 });
 
-// Class Attendance via Image URLs only
+// Class Attendance (image URLs)
 app.post("/class/attendance-url", async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { timetable_id, student_ids, image_urls } = req.body;
-    if (!timetable_id || !student_ids || !image_urls) 
-      return res.status(400).json({ error: "timetable_id, student_ids and image_urls are required" });
+    if (!timetable_id || !student_ids || !image_urls)
+      return res.status(400).json({ error: "timetable_id, student_ids, image_urls required" });
 
-    // Parse student IDs
-    let studentIds;
-    try { studentIds = JSON.parse(student_ids); } 
-    catch { studentIds = Array.isArray(student_ids) ? student_ids : [student_ids]; }
+    const studentIds = Array.isArray(student_ids) ? student_ids : JSON.parse(student_ids);
+    const urls = Array.isArray(image_urls) ? image_urls : JSON.parse(image_urls);
 
-    if (!Array.isArray(studentIds) || studentIds.length === 0)
-      return res.status(400).json({ error: "student_ids must be a non-empty array" });
+    const filePaths = await Promise.all(urls.map(url => downloadImage(url, UP_CLASSES)));
 
-    // Parse image URLs
-    let urls;
-    try { urls = JSON.parse(image_urls); } 
-    catch { urls = Array.isArray(image_urls) ? image_urls : [image_urls]; }
-
-    if (!urls.length) return res.status(400).json({ error: "At least one image URL required" });
-
-    // Download images
-    const filePaths = [];
-    for (const url of urls) {
-      const fp = await downloadImage(url, UP_CLASSES);
-      filePaths.push(fp);
-    }
-
-    // Fetch students with images
     const [students] = await conn.query(
-      `SELECT s.id AS student_id, s.name, i.face_descriptor
+      `SELECT s.id AS student_id, i.face_descriptor
        FROM ai_students s
        JOIN ai_student_images i ON s.id = i.student_id
        WHERE s.id IN (?)`,
       [studentIds]
     );
 
-    if (students.length === 0) return res.status(400).json({ error: "No student images found for given IDs" });
+    const labeledDescriptors = Object.entries(students.reduce((acc, s) => {
+      const arr = JSON.parse(s.face_descriptor);
+      const f32 = new Float32Array(arr);
+      if (!acc[s.student_id]) acc[s.student_id] = [];
+      acc[s.student_id].push(f32);
+      return acc;
+    }, {})).map(([id, descs]) => new faceapi.LabeledFaceDescriptors(id, descs));
 
-    const labeledDescriptorsMap = {};
-    students.forEach(s => {
-      try {
-        const arr = JSON.parse(s.face_descriptor);
-        const f32 = new Float32Array(arr);
-        if (!labeledDescriptorsMap[s.student_id]) labeledDescriptorsMap[s.student_id] = [];
-        labeledDescriptorsMap[s.student_id].push(f32);
-      } catch {}
-    });
+    const matcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
 
-    const labeledDescriptors = Object.entries(labeledDescriptorsMap).map(
-      ([id, descriptors]) => new faceapi.LabeledFaceDescriptors(id, descriptors)
-    );
-
-    if (labeledDescriptors.length === 0) return res.status(400).json({ error: "No valid descriptors found" });
-
-    const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
-
-    // Process all class images
     const presentSet = new Set();
-    for (const fp of filePaths) {
-      const classImg = await loadImage(fp);
-      const detections = await faceapi.detectAllFaces(classImg).withFaceLandmarks().withFaceDescriptors();
+    await Promise.all(filePaths.map(async fp => {
+      const img = await loadImage(fp);
+      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks().withFaceDescriptors();
       detections.forEach(d => {
-        const bestMatch = faceMatcher.findBestMatch(d.descriptor);
-        if (bestMatch.label !== "unknown") presentSet.add(Number(bestMatch.label));
+        const match = matcher.findBestMatch(d.descriptor);
+        if (match.label !== "unknown") presentSet.add(Number(match.label));
       });
-    }
+    }));
 
     const uniquePresent = [...presentSet];
-    const absentStudentIds = studentIds.filter(id => !uniquePresent.includes(id));
+    const absentIds = studentIds.filter(id => !uniquePresent.includes(id));
 
-    // Upsert Present
     if (uniquePresent.length) {
       const placeholders = uniquePresent.map(() => "(?, ?, 'Present')").join(",");
       const params = uniquePresent.flatMap(id => [id, timetable_id]);
       await conn.execute(
-        `INSERT INTO ai_attendance (student_id, timetable_id, status)
-         VALUES ${placeholders}
-         ON DUPLICATE KEY UPDATE status='Present'`,
+        `INSERT INTO ai_attendance (student_id, timetable_id, status) VALUES ${placeholders} ON DUPLICATE KEY UPDATE status='Present'`,
         params
       );
     }
-
-    // Upsert Absent
-    if (absentStudentIds.length) {
-      const placeholders = absentStudentIds.map(() => "(?, ?, 'Absent')").join(",");
-      const params = absentStudentIds.flatMap(id => [id, timetable_id]);
+    if (absentIds.length) {
+      const placeholders = absentIds.map(() => "(?, ?, 'Absent')").join(",");
+      const params = absentIds.flatMap(id => [id, timetable_id]);
       await conn.execute(
-        `INSERT INTO ai_attendance (student_id, timetable_id, status)
-         VALUES ${placeholders}
-         ON DUPLICATE KEY UPDATE status='Absent'`,
+        `INSERT INTO ai_attendance (student_id, timetable_id, status) VALUES ${placeholders} ON DUPLICATE KEY UPDATE status='Absent'`,
         params
       );
     }
 
-    res.json({
-      message: "Attendance processed via image URLs",
-      presentCount: uniquePresent.length,
-      absentCount: absentStudentIds.length
-    });
-
+    res.json({ message: "Attendance processed via URLs", presentCount: uniquePresent.length, absentCount: absentIds.length });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -414,18 +307,16 @@ app.post("/class/attendance-url", async (req, res) => {
   }
 });
 
-// Get Attendance by timetable
+// Get attendance
 app.get("/attendance", async (req, res) => {
   try {
     const { timetable_id } = req.query;
     if (!timetable_id) return res.status(400).json({ error: "timetable_id required" });
-
     const [rows] = await pool.query(
-      `SELECT a.id, a.status, s.id AS student_id, s.name,s.student_id,s.app_id
+      `SELECT a.id, a.status, s.id AS student_id, s.name, s.student_id, s.app_id
        FROM ai_attendance a
        JOIN ai_students s ON s.id = a.student_id
-       WHERE a.timetable_id = ?
-       ORDER BY s.name`,
+       WHERE a.timetable_id = ? ORDER BY s.name`,
       [timetable_id]
     );
     res.json({ timetable_id, records: rows });
@@ -444,8 +335,9 @@ app.get("/attendance", async (req, res) => {
 
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
-      console.log(`Add student: POST /students (student_id, app_id, name, images[3])`);
-      console.log(`Class attendance: POST /class/attendance (timetable_id, student_ids, images[1+])`);
+      console.log(`Add student: POST /students`);
+      console.log(`Class attendance: POST /class/attendance`);
+      console.log(`Class attendance via URLs: POST /class/attendance-url`);
       console.log(`Get attendance: GET /attendance?timetable_id=ID`);
     });
   } catch (err) {

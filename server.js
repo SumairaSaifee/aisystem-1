@@ -303,6 +303,117 @@ app.post("/class/attendance", upload.array("images", 5), async (req, res) => {
   }
 });
 
+// Class Attendance via Image URLs only
+app.post("/class/attendance-url", async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { timetable_id, student_ids, image_urls } = req.body;
+    if (!timetable_id || !student_ids || !image_urls) 
+      return res.status(400).json({ error: "timetable_id, student_ids and image_urls are required" });
+
+    // Parse student IDs
+    let studentIds;
+    try { studentIds = JSON.parse(student_ids); } 
+    catch { studentIds = Array.isArray(student_ids) ? student_ids : [student_ids]; }
+
+    if (!Array.isArray(studentIds) || studentIds.length === 0)
+      return res.status(400).json({ error: "student_ids must be a non-empty array" });
+
+    // Parse image URLs
+    let urls;
+    try { urls = JSON.parse(image_urls); } 
+    catch { urls = Array.isArray(image_urls) ? image_urls : [image_urls]; }
+
+    if (!urls.length) return res.status(400).json({ error: "At least one image URL required" });
+
+    // Download images
+    const filePaths = [];
+    for (const url of urls) {
+      const fp = await downloadImage(url, UP_CLASSES);
+      filePaths.push(fp);
+    }
+
+    // Fetch students with images
+    const [students] = await conn.query(
+      `SELECT s.id AS student_id, s.name, i.face_descriptor
+       FROM ai_students s
+       JOIN ai_student_images i ON s.id = i.student_id
+       WHERE s.id IN (?)`,
+      [studentIds]
+    );
+
+    if (students.length === 0) return res.status(400).json({ error: "No student images found for given IDs" });
+
+    const labeledDescriptorsMap = {};
+    students.forEach(s => {
+      try {
+        const arr = JSON.parse(s.face_descriptor);
+        const f32 = new Float32Array(arr);
+        if (!labeledDescriptorsMap[s.student_id]) labeledDescriptorsMap[s.student_id] = [];
+        labeledDescriptorsMap[s.student_id].push(f32);
+      } catch {}
+    });
+
+    const labeledDescriptors = Object.entries(labeledDescriptorsMap).map(
+      ([id, descriptors]) => new faceapi.LabeledFaceDescriptors(id, descriptors)
+    );
+
+    if (labeledDescriptors.length === 0) return res.status(400).json({ error: "No valid descriptors found" });
+
+    const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
+
+    // Process all class images
+    const presentSet = new Set();
+    for (const fp of filePaths) {
+      const classImg = await loadImage(fp);
+      const detections = await faceapi.detectAllFaces(classImg).withFaceLandmarks().withFaceDescriptors();
+      detections.forEach(d => {
+        const bestMatch = faceMatcher.findBestMatch(d.descriptor);
+        if (bestMatch.label !== "unknown") presentSet.add(Number(bestMatch.label));
+      });
+    }
+
+    const uniquePresent = [...presentSet];
+    const absentStudentIds = studentIds.filter(id => !uniquePresent.includes(id));
+
+    // Upsert Present
+    if (uniquePresent.length) {
+      const placeholders = uniquePresent.map(() => "(?, ?, 'Present')").join(",");
+      const params = uniquePresent.flatMap(id => [id, timetable_id]);
+      await conn.execute(
+        `INSERT INTO ai_attendance (student_id, timetable_id, status)
+         VALUES ${placeholders}
+         ON DUPLICATE KEY UPDATE status='Present'`,
+        params
+      );
+    }
+
+    // Upsert Absent
+    if (absentStudentIds.length) {
+      const placeholders = absentStudentIds.map(() => "(?, ?, 'Absent')").join(",");
+      const params = absentStudentIds.flatMap(id => [id, timetable_id]);
+      await conn.execute(
+        `INSERT INTO ai_attendance (student_id, timetable_id, status)
+         VALUES ${placeholders}
+         ON DUPLICATE KEY UPDATE status='Absent'`,
+        params
+      );
+    }
+
+    res.json({
+      message: "Attendance processed via image URLs",
+      presentCount: uniquePresent.length,
+      absentCount: absentStudentIds.length
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
 // Get Attendance by timetable
 app.get("/attendance", async (req, res) => {
   try {

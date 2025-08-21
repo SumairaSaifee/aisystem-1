@@ -88,16 +88,35 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 
 /* -------------------- Routes -------------------- */
 
-// Add Student with single-face & same-person validation
 app.post("/students", upload.array("images", 3), async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    const { student_id, app_id, name } = req.body;
+    const { student_id, app_id, name, image_urls } = req.body;
     if (!student_id || !app_id || !name)
       return res.status(400).json({ error: "student_id, app_id, and name are required" });
 
-    if (!req.files || req.files.length !== 3)
-      return res.status(400).json({ error: "Exactly 3 images are required" });
+    let filePaths = [];
+
+    // 1. Files from multer
+    if (req.files && req.files.length > 0) {
+      filePaths = req.files.map(f => f.path);
+    }
+
+    // 2. URLs provided
+    if (image_urls) {
+      let urls;
+      try { urls = JSON.parse(image_urls); } 
+      catch { urls = Array.isArray(image_urls) ? image_urls : [image_urls]; }
+
+      for (let i = 0; i < urls.length; i++) {
+        const filepath = await downloadImage(urls[i], UP_STUDENTS, student_id);
+        filePaths.push(filepath);
+      }
+    }
+
+    if (filePaths.length !== 3) {
+      return res.status(400).json({ error: "Exactly 3 images are required (upload or urls)" });
+    }
 
     // Duplicate check
     const [existing] = await conn.execute(
@@ -109,23 +128,19 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
 
     const descriptors = [];
 
-    for (const file of req.files) {
-      const img = await loadImage(file.path);
-      // Detect all faces
+    for (const fp of filePaths) {
+      const img = await loadImage(fp);
       const detections = await faceapi.detectAllFaces(img).withFaceLandmarks();
-
       if (detections.length === 0)
-        return res.status(400).json({ error: `No face detected in ${file.originalname}` });
-
+        return res.status(400).json({ error: `No face detected in ${path.basename(fp)}` });
       if (detections.length > 1)
-        return res.status(400).json({ error: `Multiple faces detected in ${file.originalname}. Upload only a single face.` });
+        return res.status(400).json({ error: `Multiple faces detected in ${path.basename(fp)}` });
 
-      // Get descriptor for the single face
       const descriptorObj = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
       descriptors.push(descriptorObj.descriptor);
     }
 
-    // Validate that all descriptors belong to the same person
+    // Validate same person
     const baseDescriptor = descriptors[0];
     for (let i = 1; i < descriptors.length; i++) {
       const distance = faceapi.euclideanDistance(baseDescriptor, descriptors[i]);
@@ -141,17 +156,17 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     );
     const sId = result.insertId;
 
-    // Insert images into DB
-    for (let i = 0; i < req.files.length; i++) {
-      const file = req.files[i];
-      const imagePath = path.relative(__dirname, file.path).replace(/\\/g, "/");
+    // Save images + descriptors
+    for (let i = 0; i < filePaths.length; i++) {
+      const imagePath = path.relative(__dirname, filePaths[i]).replace(/\\/g, "/");
       await conn.execute(
         "INSERT INTO ai_student_images (student_id, image_path, face_descriptor) VALUES (?, ?, ?)",
         [sId, imagePath, JSON.stringify(Array.from(descriptors[i]))]
       );
     }
 
-    res.json({ message: "Student registered with 3 images (same person, single-face validated)", student_id: sId });
+    res.json({ message: "Student registered with 3 images (file upload or URL)", student_id: sId });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

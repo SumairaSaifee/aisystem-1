@@ -7,6 +7,7 @@ const fs = require("fs");
 const mime = require("mime-types");
 const multer = require("multer");
 const mysql = require("mysql2/promise");
+const axios = require("axios");
 
 const faceapi = require("face-api.js");
 const canvas = require("canvas");
@@ -90,11 +91,21 @@ app.use("/uploads", express.static(UPLOAD_ROOT));
 
 async function downloadImage(url, folder, studentId) {
   try {
-    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const response = await axios.get(url, {
+      responseType: "arraybuffer",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; Node.js server)",
+      },
+      httpsAgent: new (require("https").Agent)({
+        rejectUnauthorized: false, // ignore SSL errors
+      }),
+    });
+
     const ext = path.extname(url).split("?")[0] || ".jpg";
     const safeName = studentId ? String(studentId).replace(/[^\w\-]+/g, "_") : Date.now();
     const fileName = `${safeName}_${Date.now()}${ext}`;
     const destPath = path.join(folder, fileName);
+
     fs.writeFileSync(destPath, response.data);
     return destPath;
   } catch (err) {

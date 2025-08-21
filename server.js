@@ -179,7 +179,7 @@ app.post("/class/attendance", upload.array("images", 5), async (req, res) => {
       `SELECT s.id AS student_id, i.face_descriptor
        FROM ai_students s
        JOIN ai_student_images i ON s.id = i.student_id
-       WHERE s.id IN (?)`,
+       WHERE s.student_id IN (?)`,
       [studentIds]
     );
 
@@ -251,10 +251,10 @@ app.post("/class/attendance-url", async (req, res) => {
     const filePaths = await Promise.all(urls.map(url => downloadImage(url, UP_CLASSES)));
 
     const [students] = await conn.query(
-      `SELECT s.id AS student_id, i.face_descriptor
+      `SELECT s.student_id AS student_id, i.face_descriptor
        FROM ai_students s
        JOIN ai_student_images i ON s.id = i.student_id
-       WHERE s.id IN (?)`,
+       WHERE s.student_id IN (?)`,
       [studentIds]
     );
 

@@ -307,6 +307,136 @@ app.post("/class/attendance-url", async (req, res) => {
   }
 });
 
+
+app.post("/api/attendance-by-url", async (req, res) => {
+  try {
+    const { timetable_id, student_ids, image_urls } = req.body;
+    if (!timetable_id || !student_ids || !image_urls)
+      return res.status(400).json({ error: "timetable_id, student_ids, image_urls required" });
+
+    const studentIds = Array.isArray(student_ids) ? student_ids : JSON.parse(student_ids);
+    const urls = Array.isArray(image_urls) ? image_urls : JSON.parse(image_urls);
+
+    // ✅ Respond immediately (avoid 499 timeout)
+    res.json({
+      message: "Attendance request received. Processing in background.",
+      timetable_id,
+      studentCount: studentIds.length,
+      imageCount: urls.length
+    });
+
+    // 🔄 Run heavy work in background
+    processAttendanceAsync(timetable_id, studentIds, urls);
+
+  } catch (err) {
+    console.error("Request error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ==============================
+// Background Worker Function
+// ==============================
+async function processAttendanceAsync(timetable_id, studentIds, urls) {
+  const conn = await pool.getConnection();
+  try {
+    console.log(`[Attendance] Start timetable ${timetable_id}...`);
+
+    // Step 1: download all images
+    const filePaths = await Promise.all(urls.map(url => downloadImage(url, UP_CLASSES)));
+
+    // Step 2: fetch students + face descriptors
+    const [students] = await conn.query(
+      `SELECT s.student_id AS student_id, i.face_descriptor
+       FROM ai_students s
+       JOIN ai_student_images i ON s.id = i.student_id
+       WHERE s.student_id IN (?)`,
+      [studentIds]
+    );
+
+    const labeledDescriptors = Object.entries(
+      students.reduce((acc, s) => {
+        try {
+          const arr = JSON.parse(s.face_descriptor);
+          const f32 = new Float32Array(arr);
+          if (!acc[s.student_id]) acc[s.student_id] = [];
+          acc[s.student_id].push(f32);
+        } catch (e) {
+          console.warn(`Invalid descriptor for student ${s.student_id}`);
+        }
+        return acc;
+      }, {})
+    ).map(([id, descs]) => new faceapi.LabeledFaceDescriptors(id, descs));
+
+    if (!labeledDescriptors.length) {
+      console.error("[Attendance] No valid student face descriptors found");
+      return;
+    }
+
+    const matcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
+
+    // Step 3: detect faces
+    const presentSet = new Set();
+    let totalDetections = 0;
+
+    await Promise.all(filePaths.map(async fp => {
+      try {
+        const img = await loadImage(fp);
+        const detections = await faceapi
+          .detectAllFaces(img)
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+
+        totalDetections += detections.length;
+
+        detections.forEach(d => {
+          const match = matcher.findBestMatch(d.descriptor);
+          if (match.label !== "unknown") {
+            presentSet.add(Number(match.label));
+          }
+        });
+      } catch (e) {
+        console.error("[Attendance] Image load/detect failed:", e.message);
+      }
+    }));
+
+    const uniquePresent = [...presentSet];
+    const absentIds = studentIds.filter(id => !uniquePresent.includes(id));
+
+    // Step 4: Mark all students as Absent
+    if (studentIds.length) {
+      const placeholders = studentIds.map(() => "(?, ?, 'Absent')").join(",");
+      const params = studentIds.flatMap(id => [id, timetable_id]);
+      await conn.execute(
+        `INSERT INTO ai_attendance (student_id, timetable_id, status) VALUES ${placeholders}
+         ON DUPLICATE KEY UPDATE status='Absent'`,
+        params
+      );
+    }
+
+    // Step 5: Update detected faces to Present
+    if (uniquePresent.length) {
+      const placeholders = uniquePresent.map(() => "(?, ?, 'Present')").join(",");
+      const params = uniquePresent.flatMap(id => [id, timetable_id]);
+      await conn.execute(
+        `INSERT INTO ai_attendance (student_id, timetable_id, status) VALUES ${placeholders}
+         ON DUPLICATE KEY UPDATE status='Present'`,
+        params
+      );
+    }
+
+    console.log(
+      `[Attendance] Done timetable ${timetable_id}: Present=${uniquePresent.length}, Absent=${absentIds.length}, Detections=${totalDetections}`
+    );
+
+  } catch (err) {
+    console.error("[Attendance] Processing error:", err);
+  } finally {
+    conn.release();
+  }
+}
+
 // Get attendance
 app.get("/attendance", async (req, res) => {
   try {

@@ -245,15 +245,21 @@ app.post("/class/attendance-url", async (req, res) => {
   try {
     const { timetable_id, student_ids, image_urls } = req.body;
     if (!timetable_id || !student_ids || !image_urls?.length) {
-      return res.status(400).json({ error: "timetable_id, student_ids, and image_urls required" });
+      return res
+        .status(400)
+        .json({ error: "timetable_id, student_ids, and image_urls required" });
     }
 
-    // Limit max URLs
-    if (image_urls.length > 10) {
-      return res.status(400).json({ error: "Max 10 image URLs allowed per request" });
+    // Limit max URLs to 5
+    if (image_urls.length > 5) {
+      return res
+        .status(400)
+        .json({ error: "Max 5 image URLs allowed per request" });
     }
 
-    const studentIds = Array.isArray(student_ids) ? student_ids : JSON.parse(student_ids);
+    const studentIds = Array.isArray(student_ids)
+      ? student_ids
+      : JSON.parse(student_ids);
 
     // Get registered students + descriptors
     const [students] = await conn.query(
@@ -279,7 +285,10 @@ app.post("/class/attendance-url", async (req, res) => {
       }, {})
     ).map(([id, descs]) => new faceapi.LabeledFaceDescriptors(id, descs));
 
-    const matcher = new faceapi.FaceMatcher(labeledDescriptors, FACE_MATCHER_THRESHOLD);
+    const matcher = new faceapi.FaceMatcher(
+      labeledDescriptors,
+      FACE_MATCHER_THRESHOLD
+    );
 
     // Detect attendance
     const presentSet = new Set();
@@ -292,12 +301,23 @@ app.post("/class/attendance-url", async (req, res) => {
         console.warn(`Failed to fetch ${url}`);
         continue;
       }
-      const buffer = await resp.buffer();
-      const resized = await sharp(buffer).resize(512).jpeg({ quality: 80 }).toBuffer();
+
+      const arrayBuffer = await resp.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const resized = await sharp(buffer)
+        .resize(512)
+        .jpeg({ quality: 80 })
+        .toBuffer();
+
       const img = await loadImage(resized);
 
-      const detections = await faceapi.detectAllFaces(img).withFaceLandmarks().withFaceDescriptors();
-      detections.forEach(d => {
+      const detections = await faceapi
+        .detectAllFaces(img)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+      detections.forEach((d) => {
         const match = matcher.findBestMatch(d.descriptor);
         if (match.label !== "unknown") {
           presentSet.add(Number(match.label));
@@ -308,12 +328,14 @@ app.post("/class/attendance-url", async (req, res) => {
     }
 
     const uniquePresent = [...presentSet];
-    const absentIds = studentIds.filter(id => !uniquePresent.includes(id));
+    const absentIds = studentIds.filter((id) => !uniquePresent.includes(id));
 
     // Batch upsert present
     if (uniquePresent.length) {
-      const placeholders = uniquePresent.map(() => "(?, ?, 'Present')").join(",");
-      const params = uniquePresent.flatMap(id => [id, timetable_id]);
+      const placeholders = uniquePresent
+        .map(() => "(?, ?, 'Present')")
+        .join(",");
+      const params = uniquePresent.flatMap((id) => [id, timetable_id]);
       await conn.execute(
         `INSERT INTO ai_attendance (student_id, timetable_id, status)
          VALUES ${placeholders}
@@ -325,7 +347,7 @@ app.post("/class/attendance-url", async (req, res) => {
     // Batch upsert absent
     if (absentIds.length) {
       const placeholders = absentIds.map(() => "(?, ?, 'Absent')").join(",");
-      const params = absentIds.flatMap(id => [id, timetable_id]);
+      const params = absentIds.flatMap((id) => [id, timetable_id]);
       await conn.execute(
         `INSERT INTO ai_attendance (student_id, timetable_id, status)
          VALUES ${placeholders}
@@ -337,7 +359,7 @@ app.post("/class/attendance-url", async (req, res) => {
     res.json({
       message: "Attendance processed",
       presentCount: uniquePresent.length,
-      absentCount: absentIds.length
+      absentCount: absentIds.length,
     });
   } catch (err) {
     console.error(err);
@@ -346,6 +368,7 @@ app.post("/class/attendance-url", async (req, res) => {
     conn.release();
   }
 });
+
 
 
 // Get attendance

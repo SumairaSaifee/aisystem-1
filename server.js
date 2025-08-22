@@ -313,9 +313,9 @@ app.get("/attendance", async (req, res) => {
     const { timetable_id } = req.query;
     if (!timetable_id) return res.status(400).json({ error: "timetable_id required" });
     const [rows] = await pool.query(
-      `SELECT a.id, a.status, s.id AS student_id, s.name, s.student_id, s.app_id
+      `SELECT a.id, a.status, s.id AS student_id_in, s.name, s.student_id, s.app_id
        FROM ai_attendance a
-       JOIN ai_students s ON s.id = a.student_id
+       JOIN ai_students s ON s.student_id = a.student_id
        WHERE a.timetable_id = ? ORDER BY s.name`,
       [timetable_id]
     );

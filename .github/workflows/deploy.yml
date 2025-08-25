@@ -17,3 +17,17 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+
+ - name: Get SSH keys and set permissions
+  run: |
+    mkdir -p ~/.ssh
+    echo "${{ secrets.SSH }}" > ~/.ssh/id_rsa
+    chmod 600 ~/.ssh/id_rsa
+
+- name: Deploy using SCP
+  run: scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa -r ./dist/* ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/node-app
+
+- name: Restart Server
+  run: ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ~/node-app && npm install && pm2 restart 0"
+
+

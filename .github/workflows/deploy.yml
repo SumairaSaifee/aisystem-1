@@ -13,21 +13,20 @@ jobs:
     container:
       image: node:20
 
-    steps:
-      - uses: actions/checkout@v3
+  steps:
+  - uses: actions/checkout@v3
 
-      - name: Clear npm cache
-        run: npm cache clean --force
+  - name: Clear npm cache
+    run: npm cache clean --force
 
-      - run: npm ci
-      - run: npm run build
+  - run: npm ci
+  - run: npm run build
 
-
- - name: Get SSH keys and set permissions
-  run: |
-    mkdir -p ~/.ssh
-    echo "${{ secrets.SSH }}" > ~/.ssh/id_rsa
-    chmod 600 ~/.ssh/id_rsa
+  - name: Get SSH keys and set permissions
+    run: |
+      mkdir -p ~/.ssh
+      echo "${{ secrets.SSH }}" > ~/.ssh/id_rsa
+      chmod 600 ~/.ssh/id
 
 - name: Deploy using SCP
   run: scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa -r ./dist/* ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/node-app

@@ -4,9 +4,8 @@ on:
   push:
     branches:
       - main
-      
+  workflow_dispatch:   # 👈 manual trigger from GitHub UI
 
-   workflow_dispatch:   # 👈 this enables manual trigger from GitHub UI
 
 jobs:
   deploy:

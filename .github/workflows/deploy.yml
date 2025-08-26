@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:   # 👈 manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -23,12 +23,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
 
-      - run: npm ci --retry=5 --fetch-retries=5
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci --retry=5 --fetch-retries=5
+
+      - name: Build project
+        run: npm run build
 
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+
+      - name: Deploy files using SCP
+        run: scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa -r ./dist/* ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/node-app
+
+      - name: Restart server with PM2
+        run: ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ~/node-app && npm install && pm2 restart 0"
 

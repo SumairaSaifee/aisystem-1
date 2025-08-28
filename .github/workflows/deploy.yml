@@ -44,11 +44,11 @@ jobs:
       - name: Create .env file on server
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cat > ~/node-app/.env <<EOL
-          DB_HOST=${{ secrets.MYSQLHOST }}
-          DB_USER=${{ secrets.MYSQLUSER }}
-          DB_PASSWORD=${{ secrets.MYSQLPASSWORD }}
-          DB_NAME=${{ secrets.MYSQLDATABASE }}
-          DB_PORT=${{ secrets.PORT }}
+          MYSQLHOST=${{ secrets.MYSQLHOST }}
+          MYSQLUSER=${{ secrets.MYSQLUSER }}
+          MYSQLPASSWORD=${{ secrets.MYSQLPASSWORD }}
+          MYSQLDATABASE=${{ secrets.MYSQLDATABASE }}
+          PORT=${{ secrets.PORT }}
           EOL"
 
 

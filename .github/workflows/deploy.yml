@@ -46,6 +46,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cat > ~/node-app/.env <<EOL
           MYSQLHOST=${{ secrets.MYSQLHOST }}
           MYSQLUSER=${{ secrets.MYSQLUSER }}
+          MYSQLPORT=${{ secrets.MYSQLPORT }}
           MYSQLPASSWORD=${{ secrets.MYSQLPASSWORD }}
           MYSQLDATABASE=${{ secrets.MYSQLDATABASE }}
           PORT=${{ secrets.PORT }}

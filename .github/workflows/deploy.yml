@@ -35,6 +35,9 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
+          #Install Rsync
+          run: apt-get update && apt-get install -y rsync
+
 
           # ✅ Replace scp step with rsync step
       - name: Sync project files to server

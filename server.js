@@ -15,7 +15,7 @@ const { Canvas, Image, ImageData, loadImage } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
 /* -------------------- Config -------------------- */
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 const FACE_MATCHER_THRESHOLD = Number(process.env.FACE_MATCHER_THRESHOLD || 0.6);
 const MODELS_DIR = path.join(__dirname, "models");
 const UPLOAD_ROOT = path.join(__dirname, "uploads");

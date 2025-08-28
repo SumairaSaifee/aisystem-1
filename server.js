@@ -11,9 +11,6 @@ const faceapi = require("face-api.js");
 const canvas = require("canvas");
 const sharp = require("sharp");
 
-const { Canvas, Image, ImageData, loadImage } = canvas;
-faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
-
 /* -------------------- Config -------------------- */
 const PORT = process.env.PORT || 5000;
 const FACE_MATCHER_THRESHOLD = Number(process.env.FACE_MATCHER_THRESHOLD || 0.6);
@@ -21,6 +18,23 @@ const MODELS_DIR = path.join(__dirname, "models");
 const UPLOAD_ROOT = path.join(__dirname, "uploads");
 const UP_STUDENTS = path.join(UPLOAD_ROOT, "students");
 const UP_CLASSES  = path.join(UPLOAD_ROOT, "classes");
+
+
+/* -------------------- Express -------------------- */
+const app = express();
+
+// ✅ Root endpoint
+app.get("/", (req, res) => {
+  res.json({
+    message: "API is running 🚀",
+    endpoints: {
+      addStudent: "POST /students",
+      classAttendance: "POST /class/attendance",
+      classAttendanceURL: "POST /class/attendance-url",
+      getAttendance: "GET /attendance?timetable_id=ID"
+    }
+  });
+});
 
 // Ensure folders exist
 [UPLOAD_ROOT, UP_STUDENTS, UP_CLASSES].forEach(d => {
@@ -94,7 +108,6 @@ async function processImage(filePath) {
 }
 
 /* -------------------- App -------------------- */
-const app = express();
 app.use(morgan("dev"));
 app.use(express.json());
 app.use("/uploads", express.static(UPLOAD_ROOT));

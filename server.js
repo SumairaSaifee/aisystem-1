@@ -464,7 +464,7 @@ app.get("/attendance", async (req, res) => {
     await loadFaceModels();
 
     app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`Add student: POST /students`);
       console.log(`Class attendance: POST /class/attendance`);
       console.log(`Class attendance via URLs: POST /class/attendance-url`);

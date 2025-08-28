@@ -35,14 +35,11 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
-          #Install Rsync
-          run: apt-get update && apt-get install -y rsync
+      - name: Install rsync   # 👈 separate step
+        run: apt-get update && apt-get install -y rsync
 
-
-          # ✅ Replace scp step with rsync step
       - name: Sync project files to server
         run: rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa" ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/node-app
 
       - name: Restart Server
         run: ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ~/node-app && npm install && pm2 restart node-app || pm2 start server.js --name node-app"
-

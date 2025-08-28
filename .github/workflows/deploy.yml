@@ -41,6 +41,17 @@ jobs:
       - name: Sync project files to server
         run: rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no -i $HOME/.ssh/id_rsa" ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/node-app
 
+      - name: Create .env file on server
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cat > ~/node-app/.env <<EOL
+          DB_HOST=${{ secrets.MYSQLHOST }}
+          DB_USER=${{ secrets.MYSQLUSER }}
+          DB_PASSWORD=${{ secrets.MYSQLPASSWORD }}
+          DB_NAME=${{ secrets.MYSQLDATABASE }}
+          DB_PORT=${{ secrets.PORT }}
+          EOL"
+
+
 
       - name: Restart Server
         run: ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "cd ~/node-app && npm install && pm2 restart node-app || pm2 start server.js --name node-app"

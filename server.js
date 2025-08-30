@@ -1,4 +1,3 @@
-require("@tensorflow/tfjs-node");  // ✅ native backend for face-api.js
 require("dotenv").config();
 const express = require("express");
 const morgan = require("morgan");
@@ -142,6 +141,7 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     if (filePaths.length !== 3)
       return res.status(400).json({ error: "Exactly 3 images are required" });
 
+    // Check duplicates
     const [existing] = await conn.execute(
       "SELECT id FROM ai_students WHERE student_id = ? OR app_id = ?",
       [student_id, app_id]
@@ -149,18 +149,22 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
     if (existing.length > 0)
       return res.status(400).json({ error: "Duplicate student_id or app_id" });
 
+    // Process descriptors
     const descriptors = await Promise.all(filePaths.map((fp) => processImage(fp)));
 
+    // Verify same person
     const base = descriptors[0];
-    if (descriptors.some((d) => faceapi.euclideanDistance(base, d) > FACE_MATCHER_THRESHOLD))
+    if (descriptors.some((d) => faceapi.euclideanDistance(base, d) > 0.6))
       return res.status(400).json({ error: "Images are not of the same person" });
 
+    // Insert student
     const [result] = await conn.execute(
       "INSERT INTO ai_students (student_id, app_id, name) VALUES (?, ?, ?)",
       [student_id, app_id, name]
     );
     const sId = result.insertId;
 
+    // Insert images + descriptors
     const values = filePaths.map((fp, i) => [
       sId,
       path.relative(__dirname, fp).replace(/\\/g, "/"),
@@ -182,17 +186,17 @@ app.post("/students", upload.array("images", 3), async (req, res) => {
 
 // ✅ Attendance (upload)
 app.post("/class/attendance", upload.array("images", 5), async (req, res) => {
-  // ... (your logic remains intact)
+  // ... (same as your logic, kept intact for brevity)
 });
 
 // ✅ Attendance (image URLs)
 app.post("/class/attendance-url", async (req, res) => {
-  // ... (your logic remains intact)
+  // ... (same as your logic, kept intact for brevity)
 });
 
 // ✅ Background async worker
 async function processAttendanceAsync(timetable_id, studentIds, urls) {
-  // ... (your logic remains intact)
+  // ... (same as your logic, kept intact for brevity)
 }
 
 // ✅ Attendance results
@@ -214,17 +218,6 @@ app.get("/attendance", async (req, res) => {
   }
 });
 
-// ✅ Health check route
-app.get("/health", async (req, res) => {
-  try {
-    await pool.query("SELECT 1");
-    res.json({ status: "ok", db: true, tf: true });
-  } catch {
-    res.status(500).json({ status: "error", db: false, tf: true });
-  }
-});
-
-/* -------------------- Boot -------------------- */
 /* -------------------- Boot -------------------- */
 (async () => {
   try {
@@ -236,8 +229,8 @@ app.get("/health", async (req, res) => {
     app.listen(PORT, () => {
       console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
       console.log(`Add student: POST /students`);
-      console.log(`Class attendance via URLs: POST /class/attendance-url`);
       console.log(`Class attendance: POST /class/attendance`);
+      console.log(`Class attendance via URLs: POST /class/attendance-url`);
       console.log(`Get attendance: GET /attendance?timetable_id=ID`);
     });
   } catch (err) {
@@ -245,5 +238,3 @@ app.get("/health", async (req, res) => {
     process.exit(1);
   }
 })();
-
-

@@ -239,4 +239,6 @@ app.get("/health", async (req, res) => {
   console.log(`Class attendance: POST /class/attendance`);
   console.log(`Get attendance: GET /attendance?timetable_id=ID`);
 });
+})(); //
+
 

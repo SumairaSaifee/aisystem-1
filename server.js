@@ -1,5 +1,5 @@
-require("dotenv").config();
 require("@tensorflow/tfjs-node");  // ✅ native backend for face-api.js
+require("dotenv").config();
 const express = require("express");
 const morgan = require("morgan");
 const path = require("path");

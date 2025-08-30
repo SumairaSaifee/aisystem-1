@@ -9,7 +9,9 @@ const mysql = require("mysql2/promise");
 const axios = require("axios");
 const faceapi = require("face-api.js");
 const canvas = require("canvas");
+const { loadImage } = require("canvas");  // ✅ Add this
 const sharp = require("sharp");
+
 
 /* -------------------- Config -------------------- */
 const PORT = process.env.PORT || 5000;

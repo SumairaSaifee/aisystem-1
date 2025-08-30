@@ -9,6 +9,11 @@ const mysql = require("mysql2/promise");
 const axios = require("axios");
 const faceapi = require("face-api.js");
 const canvas = require("canvas");
+
+// ✅ Patch canvas into face-api
+const { Canvas, Image, ImageData } = canvas;
+faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
+
 const sharp = require("sharp");
 
 /* -------------------- Config -------------------- */
@@ -233,3 +238,4 @@ app.get("/attendance", async (req, res) => {
     process.exit(1);
   }
 })();
+
